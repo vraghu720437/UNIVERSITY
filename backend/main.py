@@ -1,4 +1,5 @@
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
@@ -6,10 +7,24 @@ from pwdlib import PasswordHash
 
 from database import engine
 
+
 app = FastAPI(title="University Super App")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5500",
+        "http://localhost:5500",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 password_hash = PasswordHash.recommended()
 
 
+# Student registration request fields
 class StudentRegistration(BaseModel):
     username: str = Field(min_length=3, max_length=50)
     password: str = Field(min_length=8)
@@ -20,6 +35,12 @@ class StudentRegistration(BaseModel):
     section: str = Field(min_length=1, max_length=10)
     email: str | None = None
     phone: str | None = None
+
+
+# Student login request fields
+class StudentLogin(BaseModel):
+    username: str = Field(min_length=3, max_length=50)
+    password: str = Field(min_length=8)
 
 
 @app.get("/")
@@ -90,6 +111,45 @@ def register_student(student: StudentRegistration):
                 "or the department ID may be invalid."
             )
         )
+
+
+@app.post("/api/students/login")
+def login_student(login: StudentLogin):
+    with engine.connect() as connection:
+        result = connection.execute(
+            text("""
+                SELECT id, password_hash, role, status
+                FROM users
+                WHERE username = :username
+            """),
+            {"username": login.username}
+        ).fetchone()
+
+    if result is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    user = result._mapping
+
+    if not password_hash.verify(login.password, user["password_hash"]):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid username or password"
+        )
+
+    if user["role"] != "student" or user["status"] != "active":
+        raise HTTPException(
+            status_code=403,
+            detail="This account cannot log in"
+        )
+
+    return {
+        "message": "Login successful",
+        "user_id": user["id"],
+        "role": user["role"]
+    }
 
 
 @app.get("/api/students")
